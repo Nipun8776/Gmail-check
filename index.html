@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Panel v3.4 | Admin Reset</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;800&family=JetBrains+Mono:wght@700&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #020617; color: #f8fafc; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 2.5rem; }
+        .tab-btn.active { border-bottom: 3px solid #6366f1; color: #6366f1; }
+        #toast { transition: all 0.3s ease; transform: translateY(-150%) translateX(-50%); }
+        #toast.show { transform: translateY(0) translateX(-50%); }
+        .hidden-btn { display: none; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4 pb-20">
+
+    <div id="toast" class="fixed top-5 left-1/2 bg-indigo-600 text-white px-6 py-2 rounded-full text-[10px] font-black uppercase tracking-widest z-50 shadow-2xl">Copied!</div>
+
+    <div class="w-full max-w-md card p-8 mt-6 border border-white/5 shadow-2xl relative">
+        <div class="flex justify-between items-center mb-6">
+            <h1 onclick="handleTripleClick()" class="text-2xl font-black text-indigo-500 italic uppercase cursor-pointer select-none">Reviewer</h1>
+            <div id="queueStatus" class="text-[9px] bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-full font-bold uppercase tracking-widest">Wait: 0</div>
+        </div>
+
+        <button id="secretResetBtn" onclick="fullDatabaseReset()" class="hidden-btn w-full bg-rose-600/20 border border-rose-500/40 text-rose-500 py-2 rounded-xl text-[9px] font-black uppercase mb-6 animate-pulse">⚠️ Wipe Database & Reset ID</button>
+
+        <div class="space-y-4 mb-8 text-center">
+            <div onclick="copyText('dispEmail', 'Email')" class="bg-black/40 p-4 rounded-2xl border border-white/5 cursor-pointer active:scale-95 transition-all">
+                <p id="dispEmail" class="text-sm font-bold text-white mono truncate italic">Loading Tasks...</p>
+            </div>
+            <div onclick="copyText('dispPass', 'Password')" class="bg-black/40 p-4 rounded-2xl border border-white/5 cursor-pointer active:scale-95 transition-all">
+                <p id="dispPass" class="text-sm font-bold text-amber-500 mono">---</p>
+            </div>
+            <p id="workerName" class="text-[10px] text-slate-500 font-bold uppercase italic mt-2">User: ---</p>
+        </div>
+
+        <button onclick="updateStatus('Success', 'Verified')" class="w-full bg-emerald-600 py-4 rounded-2xl font-black uppercase text-[10px] border-b-4 border-emerald-800 text-white mb-3 shadow-lg">Approve Submission</button>
+        
+        <div class="grid grid-cols-2 gap-3 mb-6">
+            <button onclick="updateStatus('Rejected', 'Not Registered')" class="bg-slate-950 border border-rose-500/30 py-3 rounded-xl font-black uppercase text-[8px] text-rose-500 italic">Not Registered</button>
+            <button onclick="updateStatus('Rejected', 'Pass Wrong')" class="bg-slate-950 border border-amber-500/30 py-3 rounded-xl font-black uppercase text-[8px] text-amber-500 italic">Pass Wrong</button>
+        </div>
+
+        <div class="flex gap-2">
+            <button onclick="navigate(-1)" class="w-1/2 bg-slate-800/50 py-2 rounded-lg text-[9px] uppercase font-bold text-slate-400">← Prev</button>
+            <button onclick="navigate(1)" class="w-1/2 bg-slate-800/50 py-2 rounded-lg text-[9px] uppercase font-bold text-slate-400">Next →</button>
+        </div>
+    </div>
+
+    <div class="w-full max-w-md mt-10 px-2">
+        <div class="flex gap-6 border-b border-white/5 mb-6">
+            <button onclick="switchTab('approved')" id="tab-approved" class="tab-btn active pb-2 text-[10px] font-black uppercase tracking-widest italic">Approved List</button>
+            <button onclick="switchTab('history')" id="tab-history" class="tab-btn pb-2 text-[10px] font-black uppercase tracking-widest italic">Full Log</button>
+        </div>
+
+        <div id="approved-view" class="space-y-3">
+            <button onclick="copyAllApproved()" class="w-full bg-indigo-600 py-3 rounded-xl text-[9px] font-black uppercase text-white mb-4 shadow-lg transition-all">Copy All Emails</button>
+            <div id="approved-list-items" class="space-y-2"></div>
+        </div>
+
+        <div id="history-view" class="hidden space-y-2"></div>
+    </div>
+
+    <script>
+        const _supabaseUrl = 'https://emllukmevqyhnrjbrffn.supabase.co';
+        const _supabaseKey = 'sb_publishable_rFKarqIzB5J5EVIPx65K4A_w21SDPXj';
+        const supabaseClient = supabase.createClient(_supabaseUrl, _supabaseKey);
+
+        let activeQueue = [];
+        let currentIndex = 0;
+        let approvedData = [];
+        let clickCount = 0;
+
+        // --- SECRET TRIPLE CLICK HANDLER ---
+        function handleTripleClick() {
+            clickCount++;
+            if(clickCount === 3) {
+                document.getElementById('secretResetBtn').style.display = 'block';
+                showToast("Admin Reset Mode Active!");
+                setTimeout(() => {
+                    document.getElementById('secretResetBtn').style.display = 'none';
+                    clickCount = 0;
+                }, 5000); // Hide again after 5 seconds
+            }
+        }
+
+        async function fullDatabaseReset() {
+            if(!confirm("Are you sure? This will delete ALL data and reset ID to #1!")) return;
+            
+            // Note: Truncate can only be run via SQL Editor, but we can delete all rows via JS
+            const { error } = await supabaseClient.from('email_submissions').delete().neq('id', 0);
+            
+            if(!error) {
+                showToast("DATABASE WIPED!");
+                location.reload();
+            } else {
+                alert("Use SQL Editor to TRUNCATE for ID reset.");
+            }
+        }
+
+        async function init() {
+            const { data } = await supabaseClient.from('email_submissions').select('*').eq('status', 'Processing').order('created_at', { ascending: true });
+            if(data) { activeQueue = data; render(); }
+            loadApprovedOnly(); loadHistory();
+        }
+
+        async function loadApprovedOnly() {
+            const { data } = await supabaseClient.from('email_submissions').select('*').eq('status', 'Success').order('updated_at', { ascending: false });
+            if(data) {
+                approvedData = data;
+                document.getElementById('approved-list-items').innerHTML = data.map(item => `
+                    <div class="bg-emerald-500/5 border border-emerald-500/20 p-4 rounded-2xl">
+                        <p class="text-[10px] font-bold text-white mb-1 italic">${item.email}</p>
+                        <p class="text-[8px] text-emerald-400 font-black uppercase tracking-widest italic">Reason: ${item.note || 'Verified'}</p>
+                    </div>
+                `).join('');
+            }
+        }
+
+        async function loadHistory() {
+            const { data } = await supabaseClient.from('email_submissions').select('*').neq('status', 'Processing').order('updated_at', { ascending: false }).limit(10);
+            if(data) {
+                document.getElementById('history-view').innerHTML = data.map(item => `
+                    <div class="bg-slate-900 border border-white/5 p-4 rounded-xl flex justify-between items-center shadow-lg">
+                        <div class="overflow-hidden">
+                            <p class="text-[10px] font-bold text-white truncate w-40 italic">${item.email}</p>
+                            <p class="text-[8px] text-slate-500 font-bold uppercase tracking-tighter italic">${item.note || item.status}</p>
+                        </div>
+                        <span class="text-[7px] font-black uppercase px-2 py-1 rounded border ${item.status === 'Success' ? 'border-emerald-500 text-emerald-500' : 'border-rose-500 text-rose-500'} italic">${item.status}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            if(tab === 'approved') {
+                document.getElementById('approved-view').classList.remove('hidden');
+                document.getElementById('history-view').classList.add('hidden');
+            } else {
+                document.getElementById('approved-view').classList.add('hidden');
+                document.getElementById('history-view').classList.remove('hidden');
+            }
+        }
+
+        function copyAllApproved() {
+            const text = approvedData.map(i => i.email).join('\n');
+            if(!text) return;
+            navigator.clipboard.writeText(text);
+            showToast("All Emails Copied!");
+        }
+
+        function copyText(id, label) {
+            const t = document.getElementById(id).innerText;
+            if(t.includes("@") || t.length > 5) {
+                navigator.clipboard.writeText(t);
+                showToast(label + " Copied!");
+            }
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg; t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 1500);
+        }
+
+        async function updateStatus(s, n) {
+            if(activeQueue.length === 0) return;
+            const item = activeQueue[currentIndex];
+            const { error } = await supabaseClient.from('email_submissions').update({ status: s, note: n, updated_at: new Date().toISOString() }).eq('id', item.id);
+            if(!error) {
+                activeQueue.splice(currentIndex, 1);
+                if (currentIndex >= activeQueue.length) currentIndex = Math.max(0, activeQueue.length - 1);
+                render(); loadApprovedOnly(); loadHistory();
+            }
+        }
+
+        function render() {
+            document.getElementById('queueStatus').innerText = `Wait: ${activeQueue.length}`;
+            if(activeQueue.length === 0) {
+                document.getElementById('dispEmail').innerText = "All Clear!";
+                document.getElementById('dispPass').innerText = "---";
+                document.getElementById('workerName').innerText = "No Tasks";
+                return;
+            }
+            const item = activeQueue[currentIndex];
+            document.getElementById('dispEmail').innerText = item.email;
+            document.getElementById('dispPass').innerText = item.password;
+            document.getElementById('workerName').innerText = `User: ${item.worker_name || 'N/A'} (${currentIndex + 1}/${activeQueue.length})`;
+        }
+
+        function navigate(dir) {
+            let n = currentIndex + dir;
+            if(n >= 0 && n < activeQueue.length) { currentIndex = n; render(); }
+        }
+
+            init();
+    </script>
+</body>
+</html>
